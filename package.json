@@ -1,0 +1,30 @@
+{
+  "name": "bradfield-networking-jmitsch",
+  "version": "1.0.0",
+  "description": "",
+  "main": "parsing.js",
+  "scripts": {
+    "lint": "./node_modules/.bin/eslint parsing.js",
+    "fixLinting": "./node_modules/.bin/eslint --fix parsing.js",
+    "format": "./node_modules/.bin/prettier --write parsing.js",
+    "parse": "node parse.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnpmitsch/bradfield-networking-packet-parser.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/johnpmitsch/bradfield-networking-packet-parser/issues"
+  },
+  "homepage": "https://github.com/johnpmitsch/bradfield-networking-packet-parser#readme",
+  "devDependencies": {
+    "eslint": "^6.4.0",
+    "eslint-config-airbnb-base": "^14.0.0",
+    "eslint-config-prettier": "^6.3.0",
+    "eslint-plugin-import": "^2.18.2",
+    "eslint-plugin-prettier": "^3.1.0",
+    "prettier": "^1.18.2"
+  }
+}

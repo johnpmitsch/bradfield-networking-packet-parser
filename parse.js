@@ -1,19 +1,13 @@
-var fs = require('fs');
+const fs = require("fs");
 
-fs.readFile('net.cap', (err, buffer) => {
-  if (err) throw err;
-  console.log(buffer);
-
-  const globalHeaders = parseGlobalHeader(buffer);
-  console.log(globalHeaders);
-
-  const firstPacketHeaders = parsePacketHeader(buffer, 24);
-  console.log(firstPacketHeaders);
-
-  const secondPacketHeaders = parsePacketHeader(buffer, 118);
-  console.log(secondPacketHeaders);
-});
-
+const checkMagicNumber = buffer => {
+  const magicNumber = "d4c3b2a1";
+  // assert that the magic number matches the correct file type bytes
+  if (buffer.compare(Buffer.from(magicNumber, "hex")) !== 0) {
+    console.error("File type is not correct!");
+    process.exit(1);
+  }
+};
 
 /**
  * Global header format according to pcap-savefile. Each row is 4 bytes, the boxes
@@ -31,42 +25,35 @@ fs.readFile('net.cap', (err, buffer) => {
             +------------------------------+
             |   Link-layer header type     |
             +------------------------------+
-**/
-const parseGlobalHeader = (buffer) => {
+* */
+const parseGlobalHeader = buffer => {
   const headerSeparations = {
-    magicNumber: [0,4],
-    majorVersion: [4,6],
-    minorVersion: [6,8],
-    timeZoneOffset: [8,12],
-    timeStampAccuracy: [12,16],
-    snapshotLength: [16,20],
-    linkLayerHeaderType: [20,24]
-  }
+    magicNumber: [0, 4],
+    majorVersion: [4, 6],
+    minorVersion: [6, 8],
+    timeZoneOffset: [8, 12],
+    timeStampAccuracy: [12, 16],
+    snapshotLength: [16, 20],
+    linkLayerHeaderType: [20, 24]
+  };
 
-  const parsedHeaders = {}
+  const parsedHeaders = {};
 
   for (const [headerKey, separators] of Object.entries(headerSeparations)) {
-    let headerBuffer = buffer.slice(...separators)
-    let byteLength = separators[1] - separators[0]
+    const headerBuffer = buffer.slice(...separators);
+    const byteLength = separators[1] - separators[0];
 
     // the magic number shouldn't be converted to an int, we can just make sure the bytes are correct
     if (headerKey === "magicNumber") {
-      const magicNumber = "d4c3b2a1"
-      // assert that the magic number matches the correct file type bytes
-      if (headerBuffer.compare(Buffer.from(magicNumber, "hex")) !== 0) {
-        console.log("File type is not correct!");
-        process.exit(1);
-      }
+      checkMagicNumber(headerBuffer);
     } else {
-      parsedHeaders[headerKey] = headerBuffer.readIntLE(0, byteLength)
+      parsedHeaders[headerKey] = headerBuffer.readIntLE(0, byteLength);
     }
   }
   return parsedHeaders;
-}
-
+};
 
 /**
- *
  * Packet header format according to pcap-savefile. Each row is 4 bytes
               +----------------------------------------------+
               |          Time stamp, seconds value           |
@@ -77,39 +64,45 @@ const parseGlobalHeader = (buffer) => {
               +----------------------------------------------+
               |   Un-truncated length of the packet data     |
               +----------------------------------------------+
-**/
+* */
 const parsePacketHeader = (buffer, packetHeaderStart) => {
   const headerSeparators = {
-    timeStampSeconds: [0,4],
-    timeStampMicro: [4,8],
-    length: [8,12],
-    lengthUntruncated: [12,16]
-  }
+    timeStampSeconds: [0, 4],
+    timeStampMicro: [4, 8],
+    length: [8, 12],
+    lengthUntruncated: [12, 16]
+  };
 
-  const parsedHeaders = {}
+  const parsedHeaders = {};
 
   for (const [headerKey, separators] of Object.entries(headerSeparators)) {
-    let bufferStart = packetHeaderStart + separators[0];
-    let bufferEnd = packetHeaderStart + separators[1];
-    let headerBuffer = buffer.slice(bufferStart, bufferEnd);
-    let byteLength = separators[1] - separators[0];
-    parsedHeaders[headerKey] = headerBuffer.readIntLE(0, byteLength)
+    const bufferStart = packetHeaderStart + separators[0];
+    const bufferEnd = packetHeaderStart + separators[1];
+    const headerBuffer = buffer.slice(bufferStart, bufferEnd);
+    const byteLength = separators[1] - separators[0];
+    parsedHeaders[headerKey] = headerBuffer.readIntLE(0, byteLength);
   }
 
   return parsedHeaders;
+};
+
+// Ensure file is passed as input
+if (!process.argv[2]) {
+  console.error("No file specified as argument");
+  process.exit(1);
 }
 
+// Parse file
+fs.readFile(process.argv[2], (err, buffer) => {
+  if (err) throw err;
+  console.log(buffer);
 
-// version is little endian
+  const globalHeaders = parseGlobalHeader(buffer);
+  console.log(globalHeaders);
 
-//int 2 bytes
-//int 4 bytes
-//long 8 bytes
+  const firstPacketHeaders = parsePacketHeader(buffer, 24);
+  console.log(firstPacketHeaders);
 
-// first 4 bytes is magic number
-//
-// method int32be, parse to size of data
-//
-// global header is 24 bytes
-//
-// each packet header is 4 bytes Uint32LE is size of packet
+  const secondPacketHeaders = parsePacketHeader(buffer, 118);
+  console.log(secondPacketHeaders);
+});
