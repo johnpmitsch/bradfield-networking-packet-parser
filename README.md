@@ -10,6 +10,8 @@ Parses a captured network file using the Node.js standard library
 
 ## To develop
 
+`npm install` to set up development dependencies
+
 - linting: `npm run lint` 
 - format: `npm run format`
 - fix linting: `npm run fixLinting`
