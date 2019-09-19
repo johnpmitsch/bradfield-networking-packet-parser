@@ -9,21 +9,47 @@ const checkMagicNumber = buffer => {
   }
 };
 
+const bufferToMac = buffer => {
+  return buffer.toString("hex").replace(/(.{2})/g, "$1:");
+};
+
+const bufferToEthertype = buffer => {
+  if (buffer.compare(Buffer.from("0800", "hex")) === 0) return "IPv4";
+  if (buffer.compare(Buffer.from("0806", "hex")) === 0) return "ARP";
+  if (buffer.compare(Buffer.from("86DD", "hex")) === 0) return "IPv6";
+  if (buffer.compare(Buffer.from("8100", "hex")) === 0) return "IEEE 802.1Q";
+};
+
+const getHeaderValue = (type, headerBuffer, byteLength) => {
+  switch (type) {
+    case "magicNumber":
+      return checkMagicNumber(headerBuffer);
+    case "le":
+      return headerBuffer.readIntLE(0, byteLength);
+    case "be":
+      return headerBuffer.readIntBE(0, byteLength);
+    case "mac":
+      return bufferToMac(headerBuffer);
+    case "ethertype":
+      return bufferToEthertype(headerBuffer);
+    default:
+      return headerBuffer;
+  }
+};
+
 const parseHeadersFromBuffer = (buffer, headerSeparations, offset = 0) => {
   const parsedHeaders = {};
 
-  for (const [headerKey, separators] of Object.entries(headerSeparations)) {
+  for (const [headerKey, { type, separators }] of Object.entries(
+    headerSeparations
+  )) {
     const bufferStart = offset + separators[0];
     const bufferEnd = offset + separators[1];
     const headerBuffer = buffer.slice(bufferStart, bufferEnd);
     const byteLength = separators[1] - separators[0];
 
+    parsedHeaders[headerKey] = getHeaderValue(type, headerBuffer, byteLength);
     // the magic number shouldn't be converted to an int, we can just make sure the bytes are correct
-    if (headerKey === "magicNumber") {
-      checkMagicNumber(headerBuffer);
-    } else {
-      parsedHeaders[headerKey] = headerBuffer.readIntLE(0, byteLength);
-    }
   }
   return parsedHeaders;
 };
@@ -53,13 +79,13 @@ if (!process.argv[2]) {
  *
  * */
 const globalHeaderSeparations = {
-  magicNumber: [0, 4],
-  majorVersion: [4, 6],
-  minorVersion: [6, 8],
-  timeZoneOffset: [8, 12],
-  timeStampAccuracy: [12, 16],
-  snapshotLength: [16, 20],
-  linkLayerHeaderType: [20, 24]
+  magicNumber: { type: "magic", separators: [0, 4] },
+  majorVersion: { type: "le", separators: [4, 6] },
+  minorVersion: { type: "le", separators: [6, 8] },
+  timeZoneOffset: { type: "le", separators: [8, 12] },
+  timeStampAccuracy: { type: "le", separators: [12, 16] },
+  snapshotLength: { type: "le", separators: [16, 20] },
+  linkLayerHeaderType: { type: "le", separators: [20, 24] }
 };
 
 /* *  Packet header format according to pcap-savefile. Each row is 4 bytes
@@ -74,26 +100,25 @@ const globalHeaderSeparations = {
  *              +----------------------------------------------+
  * */
 const packetHeaderSeparations = {
-  timeStampSeconds: [0, 4],
-  timeStampMicro: [4, 8],
-  length: [8, 12],
-  lengthUntruncated: [12, 16]
+  timeStampSeconds: { type: "le", separators: [0, 4] },
+  timeStampMicro: { type: "le", separators: [4, 8] },
+  capturedLength: { type: "le", separators: [8, 12] },
+  untruncatedlength: { type: "le", separators: [12, 16] }
 };
 
-const globalHeaderLength = 24;
-const packetHeaderLength = 16;
+const ethernetSeparations = {
+  macDestination: { type: "mac", separators: [0, 6] },
+  macSource: { type: "mac", separators: [6, 12] },
+  ethertype: { type: "ethertype", separators: [12, 14] }
+};
 
-// Parse file
-fs.readFile(process.argv[2], (err, buffer) => {
-  if (err) throw err;
-  const globalHeader = parseHeadersFromBuffer(buffer, globalHeaderSeparations);
-  if (globalHeader.linkLayerHeaderType === 1) {
-    console.log("Ethernet Link Layer Header Type detected");
-  }
+const getPackets = buffer => {
+  const globalHeaderLength = 24;
+  const packetHeaderLength = 16;
 
-  // start iterating on packets after the global headers
   let position = globalHeaderLength;
-  let packetCount = 0;
+
+  const packets = [];
 
   while (position < buffer.length) {
     const packetHeader = parseHeadersFromBuffer(
@@ -101,10 +126,58 @@ fs.readFile(process.argv[2], (err, buffer) => {
       packetHeaderSeparations,
       position
     );
-    console.log(packetHeader);
-    position += packetHeaderLength + packetHeader.length;
-    packetCount += 1;
+
+    if (packetHeader.capturedLength !== packetHeader.untruncatedlength) {
+      console.error(
+        `Packet Length ${packetHeader.capturedLength} is not the same as the untruncated length ${packetHeader.untruncatedlength}`
+      );
+      process.exit(1);
+    }
+
+    const packetBodyStart = position + packetHeaderLength;
+    position += packetHeaderLength + packetHeader.capturedLength;
+    packets.push(buffer.slice(packetBodyStart, position));
   }
 
-  console.log(`${packetCount} packets parsed`);
+  return packets;
+};
+
+// Parse file
+fs.readFile(process.argv[2], (err, buffer) => {
+  if (err) throw err;
+  const globalHeader = parseHeadersFromBuffer(buffer, globalHeaderSeparations);
+
+  if (globalHeader.linkLayerHeaderType === 1) {
+    console.log("Ethernet Link Layer Header Type detected");
+  }
+
+  const packets = getPackets(buffer);
+
+  const ethHeaders = packets.map(packet =>
+    parseHeadersFromBuffer(packet, ethernetSeparations)
+  );
+
+  if (
+    ethHeaders.every(header => header.etherType === ethHeaders[0].etherType)
+  ) {
+    console.log("All IP datagrams have the same format");
+  } else {
+    console.error("All IP datagrams do not have the same format! Exiting.");
+    process.exit(1);
+  }
+
+  if (
+    ethHeaders.every(
+      header => header.macDestination === ethHeaders[0].macDestination
+    ) &&
+    ethHeaders.every(header => header.macSource === ethHeaders[0].macSource)
+  ) {
+    console.log(
+      "All IP datagrams have the same source and destination MAC addresses"
+    );
+    console.log(`Source MAC: ${ethHeaders[0].macSource}`);
+    console.log(`Destination MAC: ${ethHeaders[0].macDestination}`);
+  }
+
+  console.log(`${packets.length} packets parsed`);
 });
