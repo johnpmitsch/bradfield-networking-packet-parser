@@ -4,5 +4,8 @@ module.exports = {
     "prettier/prettier": ["error"],
     "no-console": "off",
     "no-restricted-syntax": "off",
+    "no-bitwise": "off",
+    "consistent-return": "off",
+    "array-callback-return": "off",
   },
 };

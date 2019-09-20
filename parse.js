@@ -10,7 +10,10 @@ const checkMagicNumber = buffer => {
 };
 
 const bufferToMac = buffer => {
-  return buffer.toString("hex").replace(/(.{2})/g, "$1:");
+  return buffer
+    .toString("hex")
+    .replace(/(.{2})/g, "$1:")
+    .slice(0, -1);
 };
 
 const bufferToEthertype = buffer => {
@@ -18,6 +21,17 @@ const bufferToEthertype = buffer => {
   if (buffer.compare(Buffer.from("0806", "hex")) === 0) return "ARP";
   if (buffer.compare(Buffer.from("86DD", "hex")) === 0) return "IPv6";
   if (buffer.compare(Buffer.from("8100", "hex")) === 0) return "IEEE 802.1Q";
+};
+
+const bufferToIp = buffer => {
+  let i = 0;
+  const splitBuffers = [];
+  while (i < 4) {
+    splitBuffers.push(buffer.slice(i, i + 1));
+    i += 1;
+  }
+  const ipNums = splitBuffers.map(buf => buf.readUInt8());
+  return ipNums.join(".");
 };
 
 const getHeaderValue = (type, headerBuffer, byteLength) => {
@@ -32,6 +46,8 @@ const getHeaderValue = (type, headerBuffer, byteLength) => {
       return bufferToMac(headerBuffer);
     case "ethertype":
       return bufferToEthertype(headerBuffer);
+    case "ip":
+      return bufferToIp(headerBuffer);
     default:
       return headerBuffer;
   }
@@ -60,24 +76,6 @@ if (!process.argv[2]) {
   process.exit(1);
 }
 
-/**
- *  Global header format according to pcap-savefile. Each row is 4 bytes, the boxes
- *  in the split rows are two bytes each.
- *            +------------------------------+
- *            |        Magic number          |
- *            +--------------+---------------+
- *            |Major version | Minor version |
- *            +--------------+---------------+
- *            |      Time zone offset        |
- *            +------------------------------+
- *            |     Time stamp accuracy      |
- *            +------------------------------+
- *            |       Snapshot length        |
- *            +------------------------------+
- *            |   Link-layer header type     |
- *            +------------------------------+
- *
- * */
 const globalHeaderSeparations = {
   magicNumber: { type: "magic", separators: [0, 4] },
   majorVersion: { type: "le", separators: [4, 6] },
@@ -88,17 +86,6 @@ const globalHeaderSeparations = {
   linkLayerHeaderType: { type: "le", separators: [20, 24] }
 };
 
-/* *  Packet header format according to pcap-savefile. Each row is 4 bytes
- *              +----------------------------------------------+
- *              |          Time stamp, seconds value           |
- *              +----------------------------------------------+
- *              |Time stamp, microseconds or nanoseconds value |
- *              +----------------------------------------------+
- *              |       Length of captured packet data         |
- *              +----------------------------------------------+
- *              |   Un-truncated length of the packet data     |
- *              +----------------------------------------------+
- * */
 const packetHeaderSeparations = {
   timeStampSeconds: { type: "le", separators: [0, 4] },
   timeStampMicro: { type: "le", separators: [4, 8] },
@@ -110,6 +97,13 @@ const ethernetSeparations = {
   macDestination: { type: "mac", separators: [0, 6] },
   macSource: { type: "mac", separators: [6, 12] },
   ethertype: { type: "ethertype", separators: [12, 14] }
+};
+
+const ipDatagramSeparations = {
+  totalLength: { type: "be", separators: [2, 4] },
+  protocol: { type: "be", separators: [9, 10] },
+  sourceIp: { type: "ip", separators: [12, 16] },
+  destinationIp: { type: "ip", separators: [16, 20] }
 };
 
 const getPackets = buffer => {
@@ -142,6 +136,65 @@ const getPackets = buffer => {
   return packets;
 };
 
+const getIpDatagrams = packets => {
+  const ethHeaders = packets.map(packet =>
+    parseHeadersFromBuffer(packet, ethernetSeparations)
+  );
+
+  if (
+    ethHeaders[0].ethertype &&
+    ethHeaders.every(header => header.ethertype === ethHeaders[0].ethertype)
+  ) {
+    console.log(`${ethHeaders[0].ethertype} format found for all IP datagrams`);
+  } else {
+    console.error("All IP datagrams do not have the same format! Exiting.");
+    process.exit(1);
+  }
+
+  // Add MAC check here
+
+  const ipDatagrams = packets.map(packet => packet.slice(14, -12));
+  return ipDatagrams;
+};
+
+function readBit(fullBuffer, bytePosition, bit) {
+  return (fullBuffer[bytePosition] >> bit) % 2;
+}
+
+const splitByte = (buffer, bytePosition) => {
+  const bits = [...Array(8).keys()].map(num =>
+    readBit(buffer, bytePosition, num)
+  );
+
+  const reversedBits = bits.reverse();
+  const bitOne = parseInt(reversedBits.slice(0, 4).join(""), 2);
+  const bitTwo = parseInt(reversedBits.slice(4, 8).join(""), 2);
+  return [bitOne, bitTwo];
+};
+
+const getTcpInfo = ipDatagrams => {
+  const tcpHeaders = ipDatagrams.map(datagram =>
+    parseHeadersFromBuffer(datagram, ipDatagramSeparations)
+  );
+
+  ipDatagrams.map((datagram, i) => {
+    const [version, ihl] = splitByte(datagram, 0);
+    if (version !== 4) console.error("IPv4 header version is incorrect!");
+    tcpHeaders[i].headerLength = ihl * 4;
+  });
+
+  console.log(tcpHeaders);
+  if (
+    tcpHeaders[0].protocol &&
+    tcpHeaders.every(header => header.protocol === tcpHeaders[0].protocol)
+  ) {
+    console.log("Same protocol found for every packet");
+  } else {
+    console.error("All packets do not have the same protocol! Exiting.");
+    process.exit(1);
+  }
+};
+
 // Parse file
 fs.readFile(process.argv[2], (err, buffer) => {
   if (err) throw err;
@@ -153,31 +206,9 @@ fs.readFile(process.argv[2], (err, buffer) => {
 
   const packets = getPackets(buffer);
 
-  const ethHeaders = packets.map(packet =>
-    parseHeadersFromBuffer(packet, ethernetSeparations)
-  );
+  console.log(`${packets.length} packets found`);
 
-  if (
-    ethHeaders.every(header => header.etherType === ethHeaders[0].etherType)
-  ) {
-    console.log("All IP datagrams have the same format");
-  } else {
-    console.error("All IP datagrams do not have the same format! Exiting.");
-    process.exit(1);
-  }
+  const ipDatagrams = getIpDatagrams(packets);
 
-  if (
-    ethHeaders.every(
-      header => header.macDestination === ethHeaders[0].macDestination
-    ) &&
-    ethHeaders.every(header => header.macSource === ethHeaders[0].macSource)
-  ) {
-    console.log(
-      "All IP datagrams have the same source and destination MAC addresses"
-    );
-    console.log(`Source MAC: ${ethHeaders[0].macSource}`);
-    console.log(`Destination MAC: ${ethHeaders[0].macDestination}`);
-  }
-
-  console.log(`${packets.length} packets parsed`);
+  getTcpInfo(ipDatagrams);
 });

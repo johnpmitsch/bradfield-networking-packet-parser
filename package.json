@@ -2,11 +2,11 @@
   "name": "bradfield-networking-jmitsch",
   "version": "1.0.0",
   "description": "",
-  "main": "parsing.js",
+  "main": "parse.js",
   "scripts": {
-    "lint": "./node_modules/.bin/eslint parsing.js",
-    "fixLinting": "./node_modules/.bin/eslint --fix parsing.js",
-    "format": "./node_modules/.bin/prettier --write parsing.js",
+    "lint": "./node_modules/.bin/eslint parse.js",
+    "fixLinting": "./node_modules/.bin/eslint --fix parse.js",
+    "format": "./node_modules/.bin/prettier --write parse.js",
     "parse": "node parse.js"
   },
   "repository": {
