@@ -48,6 +48,8 @@ const getHeaderValue = (type, headerBuffer, byteLength) => {
       return bufferToEthertype(headerBuffer);
     case "ip":
       return bufferToIp(headerBuffer);
+    case "ube":
+      return headerBuffer.readUIntBE(0, byteLength);
     default:
       return headerBuffer;
   }
@@ -104,6 +106,12 @@ const ipDatagramSeparations = {
   protocol: { type: "be", separators: [9, 10] },
   sourceIp: { type: "ip", separators: [12, 16] },
   destinationIp: { type: "ip", separators: [16, 20] }
+};
+
+const tcpSeparations = {
+  sourcePort: { type: "ube", separators: [0, 2] },
+  destinationPort: { type: "ube", separators: [2, 4] },
+  sequenceNumber: { type: "be", separators: [4, 8] }
 };
 
 const getPackets = buffer => {
@@ -179,11 +187,13 @@ const getTcpInfo = ipDatagrams => {
 
   ipDatagrams.map((datagram, i) => {
     const [version, ihl] = splitByte(datagram, 0);
-    if (version !== 4) console.error("IPv4 header version is incorrect!");
+    if (version !== 4) {
+      console.error("IPv4 header version is incorrect! Exiting now.");
+      process.exit(1);
+    }
     tcpHeaders[i].headerLength = ihl * 4;
   });
 
-  console.log(tcpHeaders);
   if (
     tcpHeaders[0].protocol &&
     tcpHeaders.every(header => header.protocol === tcpHeaders[0].protocol)
@@ -193,22 +203,69 @@ const getTcpInfo = ipDatagrams => {
     console.error("All packets do not have the same protocol! Exiting.");
     process.exit(1);
   }
+
+  return ipDatagrams.map((datagram, i) => {
+    return datagram.slice(tcpHeaders[i].headerLength);
+  });
 };
+
+const getPayloads = tcpHeaders => {
+  const headers = tcpHeaders.map(tcpHeader =>
+    parseHeadersFromBuffer(tcpHeader, tcpSeparations)
+  );
+
+  tcpHeaders.map((tcpHeader, i) => {
+    const [dataOffset] = splitByte(tcpHeader, 0);
+    headers[i].dataOffset = dataOffset;
+    headers[i].payload = tcpHeader.slice(dataOffset);
+  });
+
+  return headers;
+};
+
+function removeDuplicates(myArr, prop) {
+  return myArr.filter((obj, pos, arr) => {
+    return arr.map(mapObj => mapObj[prop]).indexOf(obj[prop]) === pos;
+  });
+}
 
 // Parse file
 fs.readFile(process.argv[2], (err, buffer) => {
   if (err) throw err;
   const globalHeader = parseHeadersFromBuffer(buffer, globalHeaderSeparations);
-
   if (globalHeader.linkLayerHeaderType === 1) {
     console.log("Ethernet Link Layer Header Type detected");
   }
-
   const packets = getPackets(buffer);
-
   console.log(`${packets.length} packets found`);
-
   const ipDatagrams = getIpDatagrams(packets);
+  const tcpHeaders = getTcpInfo(ipDatagrams);
+  const payloadWithHeaders = getPayloads(tcpHeaders);
 
-  getTcpInfo(ipDatagrams);
+  const resPayloadsWithHeaders = payloadWithHeaders.filter(
+    p => p.sourcePort === 80
+  );
+
+  const resPayloadsNoDups = removeDuplicates(
+    resPayloadsWithHeaders,
+    "sequenceNumber"
+  );
+
+  console.log(resPayloadsNoDups.map(p => p.sequenceNumber));
+  const resPayloadsSorted = resPayloadsNoDups.sort(
+    (a, b) => a.sequenceNumber - b.sequenceNumber
+  );
+  const responsePayloads = resPayloadsSorted.map(p => p.payload);
+  const combinedPayloads = Buffer.concat(responsePayloads);
+  const httpHeaderSplit = combinedPayloads.indexOf("\r\n\r\n");
+  const httpHeader = combinedPayloads.slice(0, httpHeaderSplit);
+  const imageBuffer = combinedPayloads.slice(httpHeaderSplit);
+
+  console.log(httpHeader.toString());
+  console.log(imageBuffer.length);
+  const imageFile = "parsed-image.jpg";
+  fs.writeFile(imageFile, imageBuffer, "binary", e => {
+    if (e) throw e;
+    console.log(`Image written to ${imageFile}`);
+  });
 });
