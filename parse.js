@@ -169,12 +169,16 @@ function readBit(fullBuffer, bytePosition, bit) {
   return (fullBuffer[bytePosition] >> bit) % 2;
 }
 
-const splitByte = (buffer, bytePosition) => {
+const getBits = (buffer, bytePosition) => {
   const bits = [...Array(8).keys()].map(num =>
     readBit(buffer, bytePosition, num)
   );
 
-  const reversedBits = bits.reverse();
+  return bits.reverse();
+};
+
+const splitByte = (buffer, bytePosition) => {
+  const reversedBits = getBits(buffer, bytePosition);
   const bitOne = parseInt(reversedBits.slice(0, 4).join(""), 2);
   const bitTwo = parseInt(reversedBits.slice(4, 8).join(""), 2);
   return [bitOne, bitTwo];
@@ -204,6 +208,8 @@ const getTcpInfo = ipDatagrams => {
     process.exit(1);
   }
 
+  console.log(tcpHeaders.filter(h => h.sourceIp === "192.30.252.154").length);
+
   return ipDatagrams.map((datagram, i) => {
     return datagram.slice(tcpHeaders[i].headerLength);
   });
@@ -215,9 +221,12 @@ const getPayloads = tcpHeaders => {
   );
 
   tcpHeaders.map((tcpHeader, i) => {
-    const [dataOffset] = splitByte(tcpHeader, 0);
-    headers[i].dataOffset = dataOffset;
-    headers[i].payload = tcpHeader.slice(dataOffset);
+    const [dataOffset] = splitByte(tcpHeader, 12);
+    const flags = getBits(tcpHeader, 12);
+    headers[i].syn = flags[6];
+    headers[i].fin = flags[7];
+    headers[i].dataOffset = dataOffset * 4;
+    headers[i].payload = tcpHeader.slice(headers[i].dataOffset);
   });
 
   return headers;
@@ -246,23 +255,27 @@ fs.readFile(process.argv[2], (err, buffer) => {
     p => p.sourcePort === 80
   );
 
+  console.log(resPayloadsWithHeaders.length);
   const resPayloadsNoDups = removeDuplicates(
     resPayloadsWithHeaders,
     "sequenceNumber"
   );
 
-  console.log(resPayloadsNoDups.map(p => p.sequenceNumber));
+  // console.log(resPayloadsNoDups.map(p => p.sequenceNumber));
   const resPayloadsSorted = resPayloadsNoDups.sort(
     (a, b) => a.sequenceNumber - b.sequenceNumber
   );
-  const responsePayloads = resPayloadsSorted.map(p => p.payload);
+  // console.log(resPayloadsSorted);
+  const responsePayloads = resPayloadsSorted
+    .filter(p => p.payload.length > 0)
+    .map(p => p.payload);
   const combinedPayloads = Buffer.concat(responsePayloads);
   const httpHeaderSplit = combinedPayloads.indexOf("\r\n\r\n");
   const httpHeader = combinedPayloads.slice(0, httpHeaderSplit);
   const imageBuffer = combinedPayloads.slice(httpHeaderSplit);
 
-  console.log(httpHeader.toString());
-  console.log(imageBuffer.length);
+  //console.log(httpHeader.toString());
+  //  console.log(imageBuffer.length);
   const imageFile = "parsed-image.jpg";
   fs.writeFile(imageFile, imageBuffer, "binary", e => {
     if (e) throw e;
