@@ -34,6 +34,25 @@ const bufferToIp = buffer => {
   return ipNums.join(".");
 };
 
+function readBit(fullBuffer, bytePosition, bit) {
+  return (fullBuffer[bytePosition] >> bit) % 2;
+}
+
+const getBits = (buffer, bytePosition) => {
+  const bits = [...Array(8).keys()].map(num =>
+    readBit(buffer, bytePosition, num)
+  );
+
+  return bits.reverse();
+};
+
+const splitByte = (buffer, bytePosition) => {
+  const reversedBits = getBits(buffer, bytePosition);
+  const bitOne = parseInt(reversedBits.slice(0, 4).join(""), 2);
+  const bitTwo = parseInt(reversedBits.slice(4, 8).join(""), 2);
+  return [bitOne, bitTwo];
+};
+
 const getHeaderValue = (type, headerBuffer, byteLength) => {
   switch (type) {
     case "magicNumber":
@@ -50,6 +69,8 @@ const getHeaderValue = (type, headerBuffer, byteLength) => {
       return bufferToIp(headerBuffer);
     case "ube":
       return headerBuffer.readUIntBE(0, byteLength);
+    case "do":
+      return splitByte(headerBuffer, 0)[0] * 4;
     default:
       return headerBuffer;
   }
@@ -111,7 +132,8 @@ const ipDatagramSeparations = {
 const tcpSeparations = {
   sourcePort: { type: "ube", separators: [0, 2] },
   destinationPort: { type: "ube", separators: [2, 4] },
-  sequenceNumber: { type: "be", separators: [4, 8] }
+  sequenceNumber: { type: "be", separators: [4, 8] },
+  dataOffset: { type: "do", separators: [12, 13] }
 };
 
 const getPackets = buffer => {
@@ -159,33 +181,12 @@ const getIpDatagrams = packets => {
     process.exit(1);
   }
 
-  // Add MAC check here
-
-  const ipDatagrams = packets.map(packet => packet.slice(14, -12));
+  const ipDatagrams = packets.map(packet => packet.slice(14));
   return ipDatagrams;
 };
 
-function readBit(fullBuffer, bytePosition, bit) {
-  return (fullBuffer[bytePosition] >> bit) % 2;
-}
-
-const getBits = (buffer, bytePosition) => {
-  const bits = [...Array(8).keys()].map(num =>
-    readBit(buffer, bytePosition, num)
-  );
-
-  return bits.reverse();
-};
-
-const splitByte = (buffer, bytePosition) => {
-  const reversedBits = getBits(buffer, bytePosition);
-  const bitOne = parseInt(reversedBits.slice(0, 4).join(""), 2);
-  const bitTwo = parseInt(reversedBits.slice(4, 8).join(""), 2);
-  return [bitOne, bitTwo];
-};
-
 const getTcpInfo = ipDatagrams => {
-  const tcpHeaders = ipDatagrams.map(datagram =>
+  const IpHeaders = ipDatagrams.map(datagram =>
     parseHeadersFromBuffer(datagram, ipDatagramSeparations)
   );
 
@@ -195,12 +196,12 @@ const getTcpInfo = ipDatagrams => {
       console.error("IPv4 header version is incorrect! Exiting now.");
       process.exit(1);
     }
-    tcpHeaders[i].headerLength = ihl * 4;
+    IpHeaders[i].headerLength = ihl * 4;
   });
 
   if (
-    tcpHeaders[0].protocol &&
-    tcpHeaders.every(header => header.protocol === tcpHeaders[0].protocol)
+    IpHeaders[0].protocol &&
+    IpHeaders.every(header => header.protocol === IpHeaders[0].protocol)
   ) {
     console.log("Same protocol found for every packet");
   } else {
@@ -208,28 +209,19 @@ const getTcpInfo = ipDatagrams => {
     process.exit(1);
   }
 
-  console.log(tcpHeaders.filter(h => h.sourceIp === "192.30.252.154").length);
-
   return ipDatagrams.map((datagram, i) => {
-    return datagram.slice(tcpHeaders[i].headerLength);
+    return datagram.slice(IpHeaders[i].headerLength, IpHeaders[i].totalLength);
   });
 };
 
-const getPayloads = tcpHeaders => {
-  const headers = tcpHeaders.map(tcpHeader =>
-    parseHeadersFromBuffer(tcpHeader, tcpSeparations)
-  );
-
-  tcpHeaders.map((tcpHeader, i) => {
-    const [dataOffset] = splitByte(tcpHeader, 12);
-    const flags = getBits(tcpHeader, 12);
-    headers[i].syn = flags[6];
-    headers[i].fin = flags[7];
-    headers[i].dataOffset = dataOffset * 4;
-    headers[i].payload = tcpHeader.slice(headers[i].dataOffset);
+const getPayloads = tcpDatagrams => {
+  const payloadWithHeaders = tcpDatagrams.map(tcpDatagram => {
+    const headers = parseHeadersFromBuffer(tcpDatagram, tcpSeparations);
+    headers.payload = tcpDatagram.slice(headers.dataOffset);
+    return headers;
   });
 
-  return headers;
+  return payloadWithHeaders;
 };
 
 function removeDuplicates(myArr, prop) {
@@ -248,34 +240,30 @@ fs.readFile(process.argv[2], (err, buffer) => {
   const packets = getPackets(buffer);
   console.log(`${packets.length} packets found`);
   const ipDatagrams = getIpDatagrams(packets);
-  const tcpHeaders = getTcpInfo(ipDatagrams);
-  const payloadWithHeaders = getPayloads(tcpHeaders);
+  const tcpDatagrams = getTcpInfo(ipDatagrams);
+  const payloadWithHeaders = getPayloads(tcpDatagrams);
 
   const resPayloadsWithHeaders = payloadWithHeaders.filter(
     p => p.sourcePort === 80
   );
 
-  console.log(resPayloadsWithHeaders.length);
   const resPayloadsNoDups = removeDuplicates(
     resPayloadsWithHeaders,
     "sequenceNumber"
   );
 
-  // console.log(resPayloadsNoDups.map(p => p.sequenceNumber));
   const resPayloadsSorted = resPayloadsNoDups.sort(
     (a, b) => a.sequenceNumber - b.sequenceNumber
   );
-  // console.log(resPayloadsSorted);
-  const responsePayloads = resPayloadsSorted
-    .filter(p => p.payload.length > 0)
-    .map(p => p.payload);
+  const responsePayloads = resPayloadsSorted.map(p => p.payload);
+
   const combinedPayloads = Buffer.concat(responsePayloads);
   const httpHeaderSplit = combinedPayloads.indexOf("\r\n\r\n");
-  const httpHeader = combinedPayloads.slice(0, httpHeaderSplit);
-  const imageBuffer = combinedPayloads.slice(httpHeaderSplit);
+  // const httpHeader = combinedPayloads.slice(0, httpHeaderSplit);
 
-  //console.log(httpHeader.toString());
-  //  console.log(imageBuffer.length);
+  // account for 4 bytes for the splitting characters
+  const imageBuffer = combinedPayloads.slice(httpHeaderSplit + 4);
+
   const imageFile = "parsed-image.jpg";
   fs.writeFile(imageFile, imageBuffer, "binary", e => {
     if (e) throw e;

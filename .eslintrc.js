@@ -7,5 +7,6 @@ module.exports = {
     "no-bitwise": "off",
     "consistent-return": "off",
     "array-callback-return": "off",
+    "prefer-destructuring": "off",
   },
 };
