@@ -88,7 +88,6 @@ const parseHeadersFromBuffer = (buffer, headerSeparations, offset = 0) => {
     const byteLength = separators[1] - separators[0];
 
     parsedHeaders[headerKey] = getHeaderValue(type, headerBuffer, byteLength);
-    // the magic number shouldn't be converted to an int, we can just make sure the bytes are correct
   }
   return parsedHeaders;
 };

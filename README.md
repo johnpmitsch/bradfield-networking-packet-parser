@@ -2,7 +2,7 @@
 
 ## About
 
-Parses a captured network file using the Node.js standard library
+Parses captured network packets and constructs an image from the data using the Node.js standard library
 
 ## To run
 
@@ -15,5 +15,3 @@ Parses a captured network file using the Node.js standard library
 - linting: `npm run lint` 
 - format: `npm run format`
 - fix linting: `npm run fixLinting`
-
-Always check package.json for the up-to-date-scripts
